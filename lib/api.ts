@@ -57,6 +57,105 @@ export async function fetchTransactions(
   return res.json();
 }
 
+export interface MissingTransaction {
+  id: string;
+  transaction_id: string;
+  settled_at: string | null;
+  emitted_at: string;
+  side: "credit" | "debit";
+  amount: number;
+  currency: string;
+  counterparty: string;
+  label: string;
+  operation_type: string;
+  attachment_required: boolean;
+  attachment_lost: boolean;
+}
+
+export interface MissingAccount {
+  name: string;
+  iban: string;
+  currency: string;
+  scanned: number;
+  missing_count: number;
+  transactions: MissingTransaction[];
+}
+
+export interface MissingReport {
+  range: { from: string; to: string };
+  accounts: MissingAccount[];
+  summary: { accounts: number; scanned: number; missing: number };
+}
+
+export interface FetchMissingParams {
+  from: string; // yyyy-MM-dd
+  to: string; // yyyy-MM-dd
+  requiredOnly?: boolean;
+  debitOnly?: boolean;
+  account?: string;
+}
+
+export async function fetchMissingAttachments(
+  p: FetchMissingParams,
+): Promise<MissingReport> {
+  const params = new URLSearchParams({ from: p.from, to: p.to });
+  if (p.requiredOnly) params.set("required_only", "1");
+  if (p.debitOnly) params.set("debit_only", "1");
+  if (p.account) params.set("account", p.account);
+  const res = await fetch(`/api/qonto/missing-attachments?${params.toString()}`);
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}
+
+export interface GmailMatch {
+  found: boolean;
+  confidence: "high" | "medium" | "low" | "none";
+  vendor: string;
+  query: string;
+  message_id?: string;
+  thread_id?: string;
+  sender?: string;
+  subject?: string;
+  date?: string;
+  attachment_filename?: string | null;
+  permalink?: string;
+  reason: string;
+}
+
+export async function fetchGmailMatch(p: {
+  counterparty: string;
+  date: string; // yyyy-MM-dd
+  amount?: number;
+}): Promise<GmailMatch> {
+  const params = new URLSearchParams({ counterparty: p.counterparty, date: p.date });
+  if (typeof p.amount === "number") params.set("amount", String(p.amount));
+  const res = await fetch(`/api/gmail/match?${params.toString()}`);
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}
+
+export interface ForwardResult {
+  sent: boolean;
+  id?: string;
+  to: string;
+  subject: string;
+  attachments: number;
+  bytes: number;
+}
+
+export async function forwardToQonto(
+  messageId: string,
+  dry = false,
+): Promise<ForwardResult> {
+  const res = await fetch(`/api/gmail/forward`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId, dry }),
+  });
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}
+
 export async function uploadAttachment(
   transactionId: string,
   file: File,
