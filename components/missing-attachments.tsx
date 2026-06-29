@@ -4,8 +4,10 @@ import * as React from "react";
 import {
   Check,
   ExternalLink,
+  FileText,
   Loader2,
   Mail,
+  Paperclip,
   ReceiptText,
   RefreshCw,
   Search,
@@ -30,11 +32,15 @@ import {
 } from "@/components/ui/table";
 import {
   ApiError,
+  attachFromPaperless,
   fetchGmailMatch,
   fetchMissingAttachments,
+  fetchPaperlessMatch,
   forwardToQonto,
   type GmailMatch,
   type MissingReport,
+  type MissingTransaction,
+  type PaperlessMatch,
 } from "@/lib/api";
 import { formatCurrency, formatDate, formatISODate } from "@/lib/format";
 import type { DateRange } from "@/lib/qonto/types";
@@ -54,11 +60,23 @@ export function MissingAttachments({ dateRange }: Props) {
   const [matches, setMatches] = React.useState<
     Record<string, { loading?: boolean; data?: GmailMatch; error?: string }>
   >({});
+  // per-transaction paperless-ngx match state, keyed by transaction id
+  const [paperless, setPaperless] = React.useState<
+    Record<string, { loading?: boolean; data?: PaperlessMatch; error?: string }>
+  >({});
 
   const runMatch = React.useCallback(
-    (id: string, counterparty: string, date: string, amount: number) => {
+    (t: MissingTransaction) => {
+      const id = t.id;
       setMatches((m) => ({ ...m, [id]: { loading: true } }));
-      fetchGmailMatch({ counterparty, date, amount: Math.abs(amount) })
+      fetchGmailMatch({
+        counterparty: t.counterparty || t.label,
+        date: (t.settled_at ?? t.emitted_at ?? "").slice(0, 10),
+        amount: Math.abs(t.amount),
+        currency: t.currency,
+        localAmount: Math.abs(t.local_amount),
+        localCurrency: t.local_currency,
+      })
         .then((data) => setMatches((m) => ({ ...m, [id]: { data } })))
         .catch((err: unknown) => {
           const status = err instanceof ApiError ? err.status : "?";
@@ -67,6 +85,23 @@ export function MissingAttachments({ dateRange }: Props) {
               ? "Gmail nicht verbunden."
               : `Suche fehlgeschlagen (Status ${status}).`;
           setMatches((m) => ({ ...m, [id]: { error: msg } }));
+        });
+    },
+    [],
+  );
+
+  const runPaperlessMatch = React.useCallback(
+    (id: string, counterparty: string, date: string, amount: number) => {
+      setPaperless((m) => ({ ...m, [id]: { loading: true } }));
+      fetchPaperlessMatch({ counterparty, date, amount: Math.abs(amount) })
+        .then((data) => setPaperless((m) => ({ ...m, [id]: { data } })))
+        .catch((err: unknown) => {
+          const status = err instanceof ApiError ? err.status : "?";
+          const msg =
+            status === 503
+              ? "Paperless nicht verbunden."
+              : `Suche fehlgeschlagen (Status ${status}).`;
+          setPaperless((m) => ({ ...m, [id]: { error: msg } }));
         });
     },
     [],
@@ -183,6 +218,7 @@ export function MissingAttachments({ dateRange }: Props) {
                         <TableHead className="text-right">Betrag</TableHead>
                         <TableHead>Pflicht</TableHead>
                         <TableHead>Beleg (Gmail)</TableHead>
+                        <TableHead>Beleg (Paperless)</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -220,8 +256,15 @@ export function MissingAttachments({ dateRange }: Props) {
                             <TableCell>
                               <GmailCell
                                 state={matches[t.id]}
+                                onSearch={() => runMatch(t)}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <PaperlessCell
+                                state={paperless[t.id]}
+                                transactionId={t.id}
                                 onSearch={() =>
-                                  runMatch(
+                                  runPaperlessMatch(
                                     t.id,
                                     t.counterparty || t.label,
                                     (t.settled_at ?? t.emitted_at ?? "").slice(0, 10),
@@ -321,6 +364,18 @@ function GmailCell({
         >
           öffnen <ExternalLink className="size-3" />
         </a>
+        {match.amount_matched === true && (
+          <span
+            className="inline-flex items-center gap-0.5 rounded-full bg-positive/10 px-1.5 py-0.5 text-[10px] font-medium text-positive"
+            title={
+              match.matched_amount != null
+                ? `Rechnungsbetrag ${match.matched_amount.toFixed(2)} stimmt mit der Buchung überein`
+                : "Betrag stimmt überein"
+            }
+          >
+            <Check className="size-2.5" /> Betrag
+          </span>
+        )}
       </div>
       <span className="truncate text-xs font-medium" title={match.subject}>
         {match.subject || "(ohne Betreff)"}
@@ -385,6 +440,161 @@ function ForwardButton({ messageId }: { messageId: string }) {
           <SendHorizontal className="size-3.5" />
         )}
         An Qonto weiterleiten
+      </Button>
+      {state.error && <span className="text-xs text-destructive">{state.error}</span>}
+    </div>
+  );
+}
+
+function PaperlessCell({
+  state,
+  transactionId,
+  onSearch,
+}: {
+  state?: { loading?: boolean; data?: PaperlessMatch; error?: string };
+  transactionId: string;
+  onSearch: () => void;
+}) {
+  if (state?.loading) {
+    return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
+  }
+
+  if (state?.error) {
+    return (
+      <button
+        type="button"
+        onClick={onSearch}
+        className="text-xs text-destructive hover:underline"
+      >
+        {state.error} — erneut
+      </button>
+    );
+  }
+
+  const match = state?.data;
+  if (!match) {
+    return (
+      <Button variant="outline" size="sm" className="gap-1.5" onClick={onSearch}>
+        <Search className="size-3.5" />
+        In Paperless suchen
+      </Button>
+    );
+  }
+
+  if (!match.found) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-xs text-muted-foreground">Kein Treffer</span>
+        <button
+          type="button"
+          onClick={onSearch}
+          className="text-left text-xs text-muted-foreground/80 hover:underline"
+          title={match.reason}
+        >
+          erneut suchen
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex max-w-[22rem] flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span
+          className={
+            "rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase " +
+            CONFIDENCE_STYLE[match.confidence]
+          }
+        >
+          {match.confidence}
+        </span>
+        {match.permalink && (
+          <a
+            href={match.permalink}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            öffnen <ExternalLink className="size-3" />
+          </a>
+        )}
+        {match.created && (
+          <span className="text-xs text-muted-foreground">{match.created}</span>
+        )}
+      </div>
+      <span className="truncate text-xs font-medium" title={match.title}>
+        {match.title || "(ohne Titel)"}
+      </span>
+      {match.correspondent && (
+        <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+          <FileText className="size-3 shrink-0" />
+          {match.correspondent}
+        </span>
+      )}
+      {match.original_file_name && (
+        <span className="truncate text-xs text-muted-foreground">
+          📎 {match.original_file_name}
+        </span>
+      )}
+      {match.document_id != null && (
+        <AttachButton documentId={match.document_id} transactionId={transactionId} />
+      )}
+    </div>
+  );
+}
+
+function AttachButton({
+  documentId,
+  transactionId,
+}: {
+  documentId: number;
+  transactionId: string;
+}) {
+  const [state, setState] = React.useState<{
+    loading?: boolean;
+    done?: boolean;
+    error?: string;
+  }>({});
+
+  if (state.done) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-positive">
+        <Check className="size-3.5" /> an Qonto angehängt
+      </span>
+    );
+  }
+
+  const attach = () => {
+    setState({ loading: true });
+    attachFromPaperless(documentId, transactionId)
+      .then(() => setState({ done: true }))
+      .catch((err: unknown) => {
+        const status = err instanceof ApiError ? err.status : "?";
+        const msg =
+          status === 503
+            ? "Paperless nicht verbunden"
+            : status === 404
+              ? "Dokument/Transaktion nicht gefunden"
+              : `Anhängen fehlgeschlagen (${status})`;
+        setState({ error: msg });
+      });
+  };
+
+  return (
+    <div className="mt-0.5 flex flex-col gap-0.5">
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-7 gap-1.5 self-start"
+        onClick={attach}
+        disabled={state.loading}
+      >
+        {state.loading ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Paperclip className="size-3.5" />
+        )}
+        An Qonto anhängen
       </Button>
       {state.error && <span className="text-xs text-destructive">{state.error}</span>}
     </div>

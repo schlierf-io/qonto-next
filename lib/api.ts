@@ -65,6 +65,8 @@ export interface MissingTransaction {
   side: "credit" | "debit";
   amount: number;
   currency: string;
+  local_amount: number;
+  local_currency: string;
   counterparty: string;
   label: string;
   operation_type: string;
@@ -118,6 +120,8 @@ export interface GmailMatch {
   subject?: string;
   date?: string;
   attachment_filename?: string | null;
+  amount_matched?: boolean;
+  matched_amount?: number | null;
   permalink?: string;
   reason: string;
 }
@@ -126,9 +130,15 @@ export async function fetchGmailMatch(p: {
   counterparty: string;
   date: string; // yyyy-MM-dd
   amount?: number;
+  currency?: string;
+  localAmount?: number;
+  localCurrency?: string;
 }): Promise<GmailMatch> {
   const params = new URLSearchParams({ counterparty: p.counterparty, date: p.date });
   if (typeof p.amount === "number") params.set("amount", String(p.amount));
+  if (p.currency) params.set("currency", p.currency);
+  if (typeof p.localAmount === "number") params.set("local_amount", String(p.localAmount));
+  if (p.localCurrency) params.set("local_currency", p.localCurrency);
   const res = await fetch(`/api/gmail/match?${params.toString()}`);
   if (!res.ok) throw await readError(res);
   return res.json();
@@ -137,6 +147,7 @@ export async function fetchGmailMatch(p: {
 export interface ForwardResult {
   sent: boolean;
   id?: string;
+  from: string;
   to: string;
   subject: string;
   attachments: number;
@@ -151,6 +162,54 @@ export async function forwardToQonto(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messageId, dry }),
+  });
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}
+
+export interface PaperlessMatch {
+  found: boolean;
+  confidence: "high" | "medium" | "low" | "none";
+  vendor: string;
+  query: string;
+  document_id?: number;
+  title?: string;
+  correspondent?: string | null;
+  created?: string; // yyyy-MM-dd (the document's own date)
+  original_file_name?: string | null;
+  permalink?: string;
+  reason: string;
+}
+
+export async function fetchPaperlessMatch(p: {
+  counterparty: string;
+  date: string; // yyyy-MM-dd
+  amount?: number;
+}): Promise<PaperlessMatch> {
+  const params = new URLSearchParams({ counterparty: p.counterparty, date: p.date });
+  if (typeof p.amount === "number") params.set("amount", String(p.amount));
+  const res = await fetch(`/api/paperless/match?${params.toString()}`);
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}
+
+export interface PaperlessAttachResult {
+  attached: boolean;
+  transactionId: string;
+  documentId: number;
+  filename: string;
+  bytes: number;
+}
+
+// Download the matched paperless document and attach it to the Qonto transaction.
+export async function attachFromPaperless(
+  documentId: number,
+  transactionId: string,
+): Promise<PaperlessAttachResult> {
+  const res = await fetch(`/api/paperless/attach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documentId, transactionId }),
   });
   if (!res.ok) throw await readError(res);
   return res.json();

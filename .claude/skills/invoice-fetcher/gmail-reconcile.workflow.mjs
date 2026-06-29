@@ -4,8 +4,10 @@
 // Run via the Workflow tool (NOT plain node — it needs the agent runtime + the
 // Gmail MCP). Feed it the output of:
 //   invoice-fetcher.mjs --from … --to … --required-only --gmail --json
-// flattened to an array of { id, account, date, amount, currency,
-// counterparty, vendor, amount_de, q_tight, q_loose } and passed as `args`.
+// flattened to an array of { id, account, date, amount, currency, amount_local,
+// local_currency, counterparty, vendor, amount_de, q_tight, q_loose } and passed
+// as `args`. amount_local/local_currency (from the row's gmail object) let the
+// agent match FX charges by the receipt's original amount.
 //
 // Returns a reconciliation: per transaction, the best-matching Gmail invoice
 // (sender/subject/date/threadId, attachment present?) with a verified verdict.
@@ -63,33 +65,31 @@ const matchPrompt = (t) => `You match ONE bank transaction to its invoice/receip
 
 Transaction:
 - counterparty: ${t.counterparty}  (cleaned vendor: "${t.vendor}")
-- amount: ${t.amount} ${t.currency}  (German format: ${t.amount_de})
+- booked amount: ${t.amount} ${t.currency}  (German format: ${t.amount_de})
+- original amount on the receipt: ${t.amount_local ?? t.amount} ${t.local_currency ?? t.currency}
 - charge date: ${t.date}
 - account: ${t.account}
 
 Load the Gmail search tool first: call ToolSearch with query "gmail search_threads" and select it (its name looks like mcp__<id>__search_threads). You may also load mcp__<id>__get_thread the same way.
 
 Procedure:
-1. Run search_threads with this query (already date-windowed):
+1. Run search_threads with this query (already date-windowed; for some vendors it is scoped by sender, e.g. from:(anthropic.com OR stripe.com) for Claude/Anthropic):
      ${t.q_tight}
-   A hit here means the email HAS an attachment (the query requires it).
 2. If nothing relevant, run the looser query:
      ${t.q_loose}
 3. If still nothing, try just "${t.vendor}" with the same after:/before: window.
 Pick the thread whose sender domain or subject clearly belongs to "${t.vendor}" and that looks like a receipt/invoice/order confirmation (sender like invoice@, receipts@, billing@, noreply@<vendor>, or a Stripe receipt "Your receipt from <vendor>"). Ignore marketing, rate-limit notices, dunning/Mahnung, and the user's own SENT forwards.
 
-Token discipline: rely on search_threads metadata (sender, subject, snippet, date). Only call get_thread (FULL_CONTENT) if you must read the attachment filename, and know receipt bodies can be large — if it errors as too large, proceed using the search metadata and set has_attachment from whether the tight query matched.
-
-Currency note: the email amount may be in a DIFFERENT currency than the charge (card conversion), so do NOT require an exact amount match — vendor + date proximity is the primary signal.
+Disambiguate by AMOUNT when several receipts fall in the window (e.g. Anthropic/Claude bill often): the receipt total equals the ORIGINAL amount (${t.amount_local ?? t.amount} ${t.local_currency ?? t.currency}) — NOT the booked ${t.currency} amount for FX charges. Open the most promising candidate with get_thread and confirm the total matches. Bodies can be large; if get_thread errors as too large, fall back to date proximity and metadata.
 
 Return the best match. If no credible invoice email exists, found=false, confidence="none". has_attachment=true only if the tight query matched or you saw an attachment.`
 
 const verifyPrompt = (t, m) => `Skeptically verify this proposed transaction→email match. Default to "rejected" unless the evidence is clear.
 
-Transaction: ${t.counterparty} | ${t.amount} ${t.currency} | ${t.date}
+Transaction: ${t.counterparty} | ${t.amount} ${t.currency} (original ${t.amount_local ?? t.amount} ${t.local_currency ?? t.currency}) | ${t.date}
 Proposed email: sender="${m.sender}" subject="${m.subject}" date="${m.mail_date}" thread=${m.thread_id}
 
-Is this email genuinely an invoice/receipt/order-confirmation issued by (or on behalf of) "${t.vendor}", dated within a few days of ${t.date}? Reject if it is marketing, a balance/threshold alert, a dunning notice, a different vendor, or the user's own forwarded copy. You may re-run the Gmail search tool (ToolSearch "gmail search_threads") to double-check sender/subject. Keep it to metadata. Verdict confirmed / rejected / uncertain with a one-line reason.`
+Is this email genuinely an invoice/receipt/order-confirmation issued by (or on behalf of) "${t.vendor}", dated within a few days of ${t.date}, and (if you can tell) for the original amount ${t.amount_local ?? t.amount} ${t.local_currency ?? t.currency}? Reject if it is marketing, a balance/threshold alert, a dunning notice, a different vendor, or the user's own forwarded copy. You may re-run the Gmail search tool (ToolSearch "gmail search_threads") to double-check sender/subject. Keep it to metadata. Verdict confirmed / rejected / uncertain with a one-line reason.`
 
 phase('Match')
 const reconciliation = await pipeline(

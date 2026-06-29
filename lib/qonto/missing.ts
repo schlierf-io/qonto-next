@@ -15,6 +15,8 @@ export interface MissingTransaction {
   side: "credit" | "debit";
   amount: number;
   currency: string;
+  local_amount: number; // original-currency amount (matches the receipt)
+  local_currency: string;
   counterparty: string;
   label: string;
   operation_type: string;
@@ -41,6 +43,17 @@ export interface MissingOptions {
   requiredOnly?: boolean;
   debitOnly?: boolean;
   account?: string; // case-insensitive substring of name or IBAN
+}
+
+// Transactions that legitimately never need a receipt — e.g. "Privatentnahme"
+// (owner's draw). Matched (case-insensitive) against the text fields a user
+// would write that into. Excluded from the worklist entirely.
+const NO_INVOICE_NEEDED = /privatentnahme/i;
+
+function exemptFromInvoice(t: Transaction): boolean {
+  return NO_INVOICE_NEEDED.test(
+    `${t.label ?? ""} ${t.reference ?? ""} ${t.note ?? ""} ${t.clean_counterparty_name ?? ""}`,
+  );
 }
 
 /** Page through every transaction in [from, to] for one IBAN. */
@@ -90,6 +103,7 @@ export async function getMissingAttachments(
   for (const acc of accounts) {
     const txs = await allTransactions(acc.iban, from, to);
     let miss = txs.filter((t) => !t.attachment_ids || t.attachment_ids.length === 0);
+    miss = miss.filter((t) => !exemptFromInvoice(t)); // Privatentnahme etc. need no receipt
     if (opts.requiredOnly) miss = miss.filter((t) => t.attachment_required === true);
     if (opts.debitOnly) miss = miss.filter((t) => t.side === "debit");
 
@@ -110,6 +124,8 @@ export async function getMissingAttachments(
         side: t.side,
         amount: t.amount,
         currency: t.currency,
+        local_amount: t.local_amount,
+        local_currency: t.local_currency,
         counterparty: t.clean_counterparty_name || t.label,
         label: t.label,
         operation_type: t.operation_type,

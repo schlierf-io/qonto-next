@@ -2,7 +2,7 @@
 // Qonto auto-attaches it to the transaction. Builds a real MIME forward
 // (original body + all attachments) and sends it via the Gmail API.
 
-import { getMessage, getAttachment, sendRawMessage } from "@/lib/gmail/server";
+import { getMessage, getAttachment, sendRawMessage, getProfile } from "@/lib/gmail/server";
 
 interface Part {
   mimeType?: string;
@@ -68,6 +68,7 @@ function encodeHeaderWord(value: string): string {
 export interface ForwardResult {
   sent: boolean;
   id?: string;
+  from: string;
   to: string;
   subject: string;
   attachments: number;
@@ -88,6 +89,11 @@ export async function buildForwardRaw(
   const origFrom = header(headers, "From");
   const origDate = header(headers, "Date");
 
+  // Qonto's receipt inbox only ingests mail from the account owner, so the
+  // forward must come FROM the authenticated mailbox. Gmail enforces this on send
+  // anyway, but we set the header explicitly so it's guaranteed + self-documenting.
+  const from = (await getProfile()).emailAddress;
+
   const { html, text, attachments } = walk(msg.payload);
 
   // download attachment bytes
@@ -106,6 +112,7 @@ export async function buildForwardRaw(
   const bodyHtml = intro + (html ?? (text ? `<pre>${text}</pre>` : "(kein Textkörper)"));
 
   const lines: string[] = [];
+  lines.push(`From: ${from}`);
   lines.push(`To: ${to}`);
   lines.push(`Subject: ${encodeHeaderWord(subject)}`);
   lines.push("MIME-Version: 1.0");
@@ -133,7 +140,7 @@ export async function buildForwardRaw(
   const raw = Buffer.from(mime, "utf8").toString("base64url");
   return {
     raw,
-    meta: { to, subject, attachments: files.length, bytes: Buffer.byteLength(mime, "utf8") },
+    meta: { from, to, subject, attachments: files.length, bytes: Buffer.byteLength(mime, "utf8") },
   };
 }
 
