@@ -1,0 +1,165 @@
+{
+  "name": "Google invoices → Qonto",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-1200, 300]
+    },
+    {
+      "parameters": {
+        "content": "## Google invoices → Qonto\n\nOne-time backfill: finds every Qonto transaction (in the `from`/`to` range) missing an attachment whose counterparty is Google (Workspace/Cloud/One/Ads/Play), looks up the matching invoice email via this app's own Gmail matcher, and forwards high/medium-confidence matches to your Qonto receipts inbox so Qonto auto-attaches them.\n\nNo Gmail/Qonto credentials needed in n8n — every call hits this repo's own Next.js API (`host.docker.internal:3010`), which already holds the credentials server-side.\n\n**dryRun defaults to `true`** in the Config node below: first run builds the forward email but does NOT send it, so you can review the `needs-review` + `forward` branch outputs before anything is actually emailed. Flip `dryRun` to `false` and re-run once you're happy with the matches.",
+        "height": 400,
+        "width": 460
+      },
+      "id": "sticky-readme",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -180]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "from", "type": "string", "value": "2020-01-01" },
+            { "id": "a2", "name": "to", "type": "string", "value": "={{$now.toISODate()}}" },
+            { "id": "a3", "name": "dryRun", "type": "boolean", "value": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config",
+      "name": "Config (from / to / dryRun)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-980, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3010/api/qonto/missing-attachments",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "from", "value": "={{$json.from}}" },
+            { "name": "to", "value": "={{$json.to}}" },
+            { "name": "required_only", "value": "1" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-missing",
+      "name": "Get missing attachments (Qonto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-760, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config (from / to / dryRun)').first().json;\nconst report = items[0].json;\nconst rows = [];\nfor (const acc of report.accounts ?? []) {\n  for (const t of acc.transactions ?? []) {\n    rows.push({ ...t, account: acc.name, dryRun: cfg.dryRun });\n  }\n}\n// Only Google's own invoices (Workspace/Cloud/One/Ads/Play) — same regex\n// as VENDOR_ROUTES in lib/gmail/query.ts.\nconst google = rows.filter((t) => /\\bgoogle\\b/i.test(t.counterparty || t.label || ''));\nreturn google.map((t) => ({ json: t }));"
+      },
+      "id": "flatten-filter",
+      "name": "Flatten + filter: Google only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-540, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3010/api/gmail/match",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "counterparty", "value": "={{$json.counterparty}}" },
+            { "name": "date", "value": "={{($json.settled_at || $json.emitted_at || '').slice(0,10)}}" },
+            { "name": "amount", "value": "={{$json.amount}}" },
+            { "name": "currency", "value": "={{$json.currency}}" },
+            { "name": "local_amount", "value": "={{$json.local_amount}}" },
+            { "name": "local_currency", "value": "={{$json.local_currency}}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gmail-match",
+      "name": "Gmail match",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-320, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.found === true && ['high','medium'].includes($json.confidence)}}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "confidence-check",
+      "name": "High/medium confidence?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3010/api/gmail/forward",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { messageId: $json.message_id, dry: $('Flatten + filter: Google only').item.json.dryRun } }}",
+        "options": {}
+      },
+      "id": "forward-qonto",
+      "name": "Forward to Qonto receipts inbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, 180]
+    },
+    {
+      "parameters": {},
+      "id": "needs-review",
+      "name": "Needs manual review (low confidence / no match)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [120, 440]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Config (from / to / dryRun)", "type": "main", "index": 0 }]]
+    },
+    "Config (from / to / dryRun)": {
+      "main": [[{ "node": "Get missing attachments (Qonto)", "type": "main", "index": 0 }]]
+    },
+    "Get missing attachments (Qonto)": {
+      "main": [[{ "node": "Flatten + filter: Google only", "type": "main", "index": 0 }]]
+    },
+    "Flatten + filter: Google only": {
+      "main": [[{ "node": "Gmail match", "type": "main", "index": 0 }]]
+    },
+    "Gmail match": {
+      "main": [[{ "node": "High/medium confidence?", "type": "main", "index": 0 }]]
+    },
+    "High/medium confidence?": {
+      "main": [
+        [{ "node": "Forward to Qonto receipts inbox", "type": "main", "index": 0 }],
+        [{ "node": "Needs manual review (low confidence / no match)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "qonto-next-google-invoices"
+  }
+}

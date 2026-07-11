@@ -10,13 +10,45 @@ cd qonto-next
 pnpm install          # oder npm install
 cp .env.example .env.local
 # QONTO_API_KEY und QONTO_ORG_SLUG eintragen
-pnpm dev              # http://localhost:3000
+pnpm dev              # http://localhost:3010 (fest gepinnt, da :3000 oft von anderen Projekten belegt ist)
 ```
 
 Der API-Key bleibt **serverseitig** (`process.env`) und wird über die Route Handler
 unter `app/api/qonto/*` verwendet — er landet nie im Browser-Bundle. Damit entfallen
 `proxy.conf.json`, `generate-env.js`, `public/env.js` und `window.__env` aus der
 Angular-Version.
+
+## n8n (lokale Workflow-Automation)
+
+Optionaler n8n-Container für lokale Automatisierungs-Workflows (`docker-compose.yml`).
+
+```bash
+pnpm n8n:up     # startet n8n -> http://localhost:5680
+pnpm n8n:logs   # Logs verfolgen
+pnpm n8n:stop   # Container stoppen
+```
+
+Beim ersten Aufruf von `http://localhost:5680` wird ein lokaler Owner-Account
+angelegt (n8n-eigenes User-Management). Daten (Workflows, Credentials) landen im
+Docker-Volume `n8n_data` und überleben `docker compose down` (nicht `-v`).
+
+### Workflow: Google-Rechnungen → Qonto
+
+[`n8n/workflows/google-invoices-to-qonto.json`](n8n/workflows/google-invoices-to-qonto.json)
+— einmaliger Backfill: findet alle Qonto-Transaktionen ohne Beleg mit Google
+als Gegenpartei (Workspace/Cloud/One/Ads/Play), sucht die passende
+Rechnungs-E-Mail über den bestehenden Gmail-Matcher der App und leitet
+Treffer mit `high`/`medium`-Konfidenz an den Qonto-Belege-Posteingang weiter
+(Qonto hängt sie dann automatisch an die Transaktion an).
+
+- **Braucht keine eigenen Credentials in n8n** — jeder Call geht an die
+  lokale App (`http://host.docker.internal:3010/api/...`), die Gmail/Qonto
+  bereits serverseitig verbunden hat. Voraussetzung: `pnpm dev` läuft.
+- **Import**: n8n-UI → Workflows → *Import from File* → die JSON-Datei wählen.
+- **`dryRun`** (im Node "Config") steht standardmäßig auf `true` — der erste
+  Lauf baut die Weiterleitung nur auf, ohne zu senden. Ergebnis in beiden
+  Zweigen (`Forward to Qonto receipts inbox` / `Needs manual review`)
+  prüfen, dann `dryRun` auf `false` setzen und erneut ausführen.
 
 ## Struktur
 

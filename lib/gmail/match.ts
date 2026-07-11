@@ -219,8 +219,15 @@ export async function matchTransaction(input: MatchInput): Promise<GmailMatch> {
     candidates = await searchMessages(q.loose, limit);
   }
 
+  // fromTight only proves an attachment when the tight query actually included
+  // `has:attachment` — linkOnly routes (e.g. Google) drop that clause, so
+  // membership in the tight result set says nothing about a real PDF. Without
+  // this, any google.com mail (a security alert, a product update — no receipt
+  // signal otherwise) could ride "fromTight" into a false receiptSignal/score.
+  const hasAttachmentSignal = fromTight && !q.route?.linkOnly;
+
   const scored = candidates
-    .map((m) => scoreCandidate(m, vendor, input.date, fromTight, input.selfEmail))
+    .map((m) => scoreCandidate(m, vendor, input.date, hasAttachmentSignal, input.selfEmail))
     .filter((s): s is Scored => s !== null && s.score >= 3)
     .sort((a, b) => b.score - a.score || a.proximity - b.proximity);
 
