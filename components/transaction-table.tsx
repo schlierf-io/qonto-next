@@ -4,10 +4,13 @@ import * as React from "react";
 import {
   type ColumnDef,
   type SortingState,
+  createSortedRowModel,
   flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
+  rowSortingFeature,
+  sortFn_alphanumeric,
+  sortFn_text,
+  tableFeatures,
+  useTable,
 } from "@tanstack/react-table";
 import {
   ChevronLeft,
@@ -50,6 +53,15 @@ import { exportStatementPdf } from "@/lib/pdf/statement";
 import type { BankAccount, DateRange, Transaction } from "@/lib/qonto/types";
 
 const PAGE_SIZE_OPTIONS = [100, 10, 25, 50];
+
+// TanStack Table v9 only exposes APIs for registered features. Sorting is
+// client-side within the current page; pagination is done by the Qonto API.
+// "auto" sorting resolves strings to alphanumeric/text and numbers to basic.
+const tableFeatureSet = tableFeatures({
+  rowSortingFeature,
+  sortedRowModel: createSortedRowModel(),
+  sortFns: { alphanumeric: sortFn_alphanumeric, text: sortFn_text },
+});
 
 interface Props {
   account: BankAccount | null;
@@ -198,7 +210,7 @@ export function TransactionTable({ account, dateRange }: Props) {
     }
   };
 
-  const columns = React.useMemo<ColumnDef<Transaction>[]>(
+  const columns = React.useMemo<ColumnDef<typeof tableFeatureSet, Transaction>[]>(
     () => [
       {
         id: "logo",
@@ -359,14 +371,12 @@ export function TransactionTable({ account, dateRange }: Props) {
     [account, balances, uploadingIds],
   );
 
-  const table = useReactTable({
+  const table = useTable({
+    features: tableFeatureSet,
     data: transactions,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    manualPagination: true,
   });
 
   const handleExportStatement = () => {
@@ -481,7 +491,7 @@ export function TransactionTable({ account, dateRange }: Props) {
             ) : hasData ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(
                         cell.column.columnDef.cell,
