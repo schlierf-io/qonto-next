@@ -4,7 +4,6 @@ import * as React from "react";
 import { AccountSelector } from "@/components/account-selector";
 import { DateRangePicker } from "@/components/date-range-picker";
 import { TransactionTable } from "@/components/transaction-table";
-import { MissingAttachments } from "@/components/missing-attachments";
 import type { BankAccount, DateRange } from "@/lib/qonto/types";
 
 export default function Home() {
@@ -34,8 +33,6 @@ export default function Home() {
       </div>
 
       <TransactionTable account={account} dateRange={dateRange} />
-
-      <MissingAttachments dateRange={dateRange} />
     </main>
   );
 }
