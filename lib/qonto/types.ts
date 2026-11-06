@@ -44,6 +44,8 @@ export interface Transaction {
   attachment_lost: boolean;
   attachment_required: boolean;
   has_attachment?: boolean;
+  // Derived: tagged with the "Privatentnahme" label or one of its sub-labels.
+  private_withdrawal?: boolean;
   clean_counterparty_name: string | null;
   logo_url?: string | null;
   settled_balance_cents: number;

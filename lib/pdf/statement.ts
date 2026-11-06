@@ -57,7 +57,8 @@ export async function exportStatementPdf({
 
     let description = transaction.label || "";
     if (transaction.reference) description += "\n" + transaction.reference;
-    if (transaction.note) description += "\n" + transaction.note;
+    if (transaction.note) description += "\nKommentar: " + transaction.note;
+    if (transaction.private_withdrawal) description += "\nLabel: Privatentnahme";
 
     const amount =
       transaction.side === "debit" ? -transaction.amount : transaction.amount;

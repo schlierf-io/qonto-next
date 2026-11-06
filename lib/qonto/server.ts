@@ -80,6 +80,48 @@ export async function getAccounts(): Promise<Organization> {
   return org;
 }
 
+interface QontoLabel {
+  id: string;
+  name: string;
+  parent_id: string | null;
+}
+
+// Labels change rarely; cache them so every transactions page doesn't refetch.
+const LABEL_CACHE_TTL_MS = 5 * 60 * 1000;
+let labelCache: { at: number; labels: Map<string, QontoLabel> } | null = null;
+
+async function getLabels(): Promise<Map<string, QontoLabel>> {
+  if (labelCache && Date.now() - labelCache.at < LABEL_CACHE_TTL_MS) {
+    return labelCache.labels;
+  }
+  const labels = new Map<string, QontoLabel>();
+  let page: number | null = 1;
+  while (page) {
+    const data = await qontoFetch(`/labels?current_page=${page}&per_page=100`);
+    for (const label of (data.labels ?? []) as QontoLabel[]) labels.set(label.id, label);
+    page = data.meta?.next_page ?? null;
+  }
+  labelCache = { at: Date.now(), labels };
+  return labels;
+}
+
+/** True if the label, or any label above it in the tree, is named `name`. */
+function hasLabelInTree(
+  labelId: string,
+  name: string,
+  labels: Map<string, QontoLabel>,
+): boolean {
+  const wanted = name.toLowerCase();
+  const seen = new Set<string>();
+  let current = labels.get(labelId);
+  while (current && !seen.has(current.id)) {
+    if (current.name.trim().toLowerCase() === wanted) return true;
+    seen.add(current.id);
+    current = current.parent_id ? labels.get(current.parent_id) : undefined;
+  }
+  return false;
+}
+
 export async function getTransactions(
   iban: string,
   startDate: Date,
@@ -101,7 +143,11 @@ export async function getTransactions(
     per_page: String(perPage),
   });
 
-  const data = (await qontoFetch(`/transactions?${params.toString()}`)) as TransactionsResponse;
+  const [data, labels] = await Promise.all([
+    qontoFetch(`/transactions?${params.toString()}`) as Promise<TransactionsResponse>,
+    // Labels only decorate the rows — a failure here must not break the list.
+    getLabels().catch(() => new Map<string, QontoLabel>()),
+  ]);
   if (!data.transactions) data.transactions = [];
 
   data.transactions.forEach((tx) => {
@@ -115,6 +161,9 @@ export async function getTransactions(
     tx.vat_amount = tx.vat_amount_cents !== null ? tx.vat_amount_cents / 100 : null;
     if (tx.operation_type === "card") tx.reference = "Kreditkartenzahlung";
     tx.has_attachment = !!tx.attachment_ids && tx.attachment_ids.length > 0;
+    tx.private_withdrawal = (tx.label_ids ?? []).some((id) =>
+      hasLabelInTree(id, "Privatentnahme", labels),
+    );
   });
 
   return data;

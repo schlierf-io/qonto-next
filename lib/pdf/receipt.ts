@@ -106,7 +106,8 @@ export async function exportReceiptPdf({
     addDetailRow("Gegenpartei:", transaction.clean_counterparty_name);
   }
   if (transaction.reference) addDetailRowWrapped("Referenz:", transaction.reference);
-  if (transaction.note) addDetailRowWrapped("Notiz:", transaction.note);
+  if (transaction.note) addDetailRowWrapped("Kommentar:", transaction.note);
+  if (transaction.private_withdrawal) addDetailRow("Label:", "Privatentnahme");
   yPos += 6;
 
   // ===== AMOUNT =====

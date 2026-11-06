@@ -16,6 +16,7 @@ import {
   Download,
   FileDown,
   Loader2,
+  MessageSquare,
   Paperclip,
   UploadCloud,
 } from "lucide-react";
@@ -225,7 +226,9 @@ export function TransactionTable({ account, dateRange }: Props) {
         accessorFn: (tx) => `${tx.reference || ""} ${tx.note || ""}`,
         cell: ({ row }) => {
           const tx = row.original;
-          if (!tx.label && !tx.reference && !tx.note) return "-";
+          if (!tx.label && !tx.reference && !tx.note && !tx.private_withdrawal) {
+            return "-";
+          }
           return (
             <div className="flex flex-col">
               {tx.label && <span className="font-semibold">{tx.label}</span>}
@@ -233,7 +236,21 @@ export function TransactionTable({ account, dateRange }: Props) {
                 <span className="text-muted-foreground">{tx.reference}</span>
               )}
               {tx.note && (
-                <span className="text-muted-foreground">{tx.note}</span>
+                <span className="mt-0.5 flex items-start gap-1">
+                  <MessageSquare
+                    className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <span>
+                    <span className="text-muted-foreground">Kommentar:</span>{" "}
+                    {tx.note}
+                  </span>
+                </span>
+              )}
+              {tx.private_withdrawal && (
+                <span className="mt-1 w-fit rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  Privatentnahme
+                </span>
               )}
             </div>
           );

@@ -46,11 +46,13 @@ export interface MissingOptions {
 }
 
 // Transactions that legitimately never need a receipt — e.g. "Privatentnahme"
-// (owner's draw). Matched (case-insensitive) against the text fields a user
-// would write that into. Excluded from the worklist entirely.
+// (owner's draw). Matched by the Privatentnahme label tree, or (case-insensitive)
+// against the text fields a user would write that into. Excluded from the
+// worklist entirely.
 const NO_INVOICE_NEEDED = /privatentnahme/i;
 
 function exemptFromInvoice(t: Transaction): boolean {
+  if (t.private_withdrawal) return true;
   return NO_INVOICE_NEEDED.test(
     `${t.label ?? ""} ${t.reference ?? ""} ${t.note ?? ""} ${t.clean_counterparty_name ?? ""}`,
   );
