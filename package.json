@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3010",
+    "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3010",
+    "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "n8n:up": "docker compose up -d n8n",
     "n8n:stop": "docker compose stop n8n",

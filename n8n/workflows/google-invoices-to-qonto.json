@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "content": "## Google invoices → Qonto\n\nOne-time backfill: finds every Qonto transaction (in the `from`/`to` range) missing an attachment whose counterparty is Google (Workspace/Cloud/One/Ads/Play), looks up the matching invoice email via this app's own Gmail matcher, and forwards high/medium-confidence matches to your Qonto receipts inbox so Qonto auto-attaches them.\n\nNo Gmail/Qonto credentials needed in n8n — every call hits this repo's own Next.js API (`host.docker.internal:3010`), which already holds the credentials server-side.\n\n**dryRun defaults to `true`** in the Config node below: first run builds the forward email but does NOT send it, so you can review the `needs-review` + `forward` branch outputs before anything is actually emailed. Flip `dryRun` to `false` and re-run once you're happy with the matches.",
+        "content": "## Google invoices → Qonto\n\nOne-time backfill: finds every Qonto transaction (in the `from`/`to` range) missing an attachment whose counterparty is Google (Workspace/Cloud/One/Ads/Play), looks up the matching invoice email via this app's own Gmail matcher, and forwards high/medium-confidence matches to your Qonto receipts inbox so Qonto auto-attaches them.\n\nNo Gmail/Qonto credentials needed in n8n — every call hits this repo's own Next.js API (`host.docker.internal:3000`), which already holds the credentials server-side.\n\n**dryRun defaults to `true`** in the Config node below: first run builds the forward email but does NOT send it, so you can review the `needs-review` + `forward` branch outputs before anything is actually emailed. Flip `dryRun` to `false` and re-run once you're happy with the matches.",
         "height": 400,
         "width": 460
       },
@@ -40,7 +40,7 @@
     },
     {
       "parameters": {
-        "url": "http://host.docker.internal:3010/api/qonto/missing-attachments",
+        "url": "http://host.docker.internal:3000/api/qonto/missing-attachments",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -69,7 +69,7 @@
     },
     {
       "parameters": {
-        "url": "http://host.docker.internal:3010/api/gmail/match",
+        "url": "http://host.docker.internal:3000/api/gmail/match",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -114,7 +114,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:3010/api/gmail/forward",
+        "url": "http://host.docker.internal:3000/api/gmail/forward",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ { messageId: $json.message_id, dry: $('Flatten + filter: Google only').item.json.dryRun } }}",

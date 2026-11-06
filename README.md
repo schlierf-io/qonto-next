@@ -10,7 +10,7 @@ cd qonto-next
 pnpm install          # oder npm install
 cp .env.example .env.local
 # QONTO_API_KEY und QONTO_ORG_SLUG eintragen
-pnpm dev              # http://localhost:3010 (fest gepinnt, da :3000 oft von anderen Projekten belegt ist)
+pnpm dev              # http://localhost:3000
 ```
 
 Der API-Key bleibt **serverseitig** (`process.env`) und wird über die Route Handler
@@ -42,7 +42,7 @@ Treffer mit `high`/`medium`-Konfidenz an den Qonto-Belege-Posteingang weiter
 (Qonto hängt sie dann automatisch an die Transaktion an).
 
 - **Braucht keine eigenen Credentials in n8n** — jeder Call geht an die
-  lokale App (`http://host.docker.internal:3010/api/...`), die Gmail/Qonto
+  lokale App (`http://host.docker.internal:3000/api/...`), die Gmail/Qonto
   bereits serverseitig verbunden hat. Voraussetzung: `pnpm dev` läuft.
 - **Import**: n8n-UI → Workflows → *Import from File* → die JSON-Datei wählen.
 - **`dryRun`** (im Node "Config") steht standardmäßig auf `true` — der erste
