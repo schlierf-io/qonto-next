@@ -21,8 +21,8 @@ Two capabilities:
      **Run (Gmail as source)** below.
    - **paperless-ngx** — the driver's `--paperless` mode searches your
      paperless-ngx archive directly (Token auth) and reports the best-matching
-     document per transaction; in the app, one click downloads it and attaches it
-     to the Qonto transaction. See **Run (paperless-ngx as source)** below.
+     document per transaction; the app's `POST /api/paperless/attach` downloads it
+     and attaches it to the Qonto transaction. See **Run (paperless-ngx as source)** below.
 
 > Paths below are relative to the app root (`qonto-next/`). Run from there.
 
@@ -150,10 +150,9 @@ Tune the window with `--before` / `--after` (default 10 / 5 days). With `--json`
 title, correspondent, created, score, confidence, url, reason }`. `--gmail` and
 `--paperless` can be combined — each annotates the row independently.
 
-**Resolve in the app (one click).** The "Fehlende Belege" panel has an
-**"An Qonto anhängen"** button per paperless match: it downloads the document's
-PDF from paperless and uploads it straight onto the Qonto transaction — no mail
-round-trip. See **In the app (UI)** below.
+**Resolve via the app API.** `POST /api/paperless/attach { documentId,
+transactionId }` downloads the document's PDF from paperless and uploads it
+straight onto the Qonto transaction — no mail round-trip. See **App API** below.
 
 ### How the match is scored
 
@@ -173,9 +172,13 @@ else low.
 > the matcher searches by vendor and rejects documents dated too far from the
 > charge — without this, an old invoice from the same vendor matches at "high".
 
-## In the app (UI)
+## App API
 
-The worklist is also built into the Next.js app, so it works without the CLI:
+The worklist and the Gmail / paperless matching are also exposed as Next.js API
+routes, so they work without the CLI (the n8n workflow
+[`n8n/workflows/google-invoices-to-qonto.json`](n8n/workflows/google-invoices-to-qonto.json)
+calls them). The former "Fehlende Belege" UI panel has been removed — there is
+no UI for this any more; use the routes below or the CLI.
 
 - **Server logic** [`lib/qonto/missing.ts`](lib/qonto/missing.ts) — `getMissingAttachments(from, to, opts)`,
   the same paginate-all-accounts-then-filter logic as the driver, reusing the
@@ -183,22 +186,17 @@ The worklist is also built into the Next.js app, so it works without the CLI:
 - **API route** `GET /api/qonto/missing-attachments?from=…&to=…&required_only=1&debit_only=1&account=…`
   ([app/api/qonto/missing-attachments/route.ts](app/api/qonto/missing-attachments/route.ts))
   returns `{ range, accounts[], summary }` — the same JSON shape as the CLI.
-- **UI panel** [`components/missing-attachments.tsx`](components/missing-attachments.tsx)
-  ("Fehlende Belege"), rendered under the table in [app/page.tsx](app/page.tsx).
-  It loads the cross-account worklist for the selected date range, with a
-  "Nur erforderliche / Alle ohne Beleg" toggle, a count badge, and a refresh.
 
-Verified live (`pnpm dev`, May 2026 default range): the panel shows the
-Geschäftskonto worklist — 21 of 34 transactions without a receipt — matching
-`curl /api/qonto/missing-attachments`. Note: in this org **every** missing
-transaction is `attachment_required`, so the toggle count is identical in both
-modes (correct, not a bug).
+Verified live (May 2026): `curl /api/qonto/missing-attachments` returns the
+Geschäftskonto worklist — 21 of 34 transactions without a receipt. Note: in
+this org **every** missing transaction is `attachment_required`, so
+`required_only=1` returns the same count (correct, not a bug).
 
-### Gmail matching in the app
+### Gmail matching (API)
 
-Each worklist row has an **"In Gmail suchen"** button that finds its invoice
-email server-side — same idea as the `gmail-reconcile` workflow, but with a
-deterministic (no-LLM) matcher and the Gmail API instead of the MCP.
+`GET /api/gmail/match` finds a transaction's invoice email server-side — same
+idea as the `gmail-reconcile` workflow, but with a deterministic (no-LLM)
+matcher and the Gmail API instead of the MCP.
 
 - **Connection** [`lib/gmail/server.ts`](lib/gmail/server.ts) — read-only Gmail
   client (OAuth refresh-token → access-token, `searchMessages`/`getMessage`/
@@ -232,20 +230,19 @@ deterministic (no-LLM) matcher and the Gmail API instead of the MCP.
   `$25.00`, not the booked €21.72), so `local_amount` is passed through. For
   routed vendors (Anthropic bills many times) the amount is **required** — no
   amount match ⇒ "Kein Treffer" rather than a wrong same-vendor receipt; a
-  confirmed amount shows a green **Betrag** badge and lifts confidence to `high`.
+  confirmed amount sets `amount_matched: true` and lifts confidence to `high`.
 - **Route** `GET /api/gmail/match?counterparty=…&date=…&amount=…&currency=…&local_amount=…&local_currency=…`
-  ([app/api/gmail/match/route.ts](app/api/gmail/match/route.ts)) → `GmailMatch`.
-- **UI** the `GmailCell` in [`components/missing-attachments.tsx`](components/missing-attachments.tsx):
-  confidence badge, subject, sender, attachment filename, and an **öffnen** deep
-  link to the thread in Gmail.
+  ([app/api/gmail/match/route.ts](app/api/gmail/match/route.ts)) → `GmailMatch`
+  (confidence, subject, sender, attachment filename, and a `permalink` to the
+  thread in Gmail).
 
 Verified live: Tailscale / Railway / Skool → real receipts at `high`; a Google
 Workspace **product-update** mail is correctly rejected (no receipt signal).
 
-**One-click forward to Qonto** — each match has an **"An Qonto weiterleiten"**
-button. [`lib/gmail/forward.ts`](lib/gmail/forward.ts) rebuilds the original
-mail (body + all attachments) and sends it via `POST /api/gmail/forward`
-([route](app/api/gmail/forward/route.ts)) to `QONTO_RECEIPTS_INBOX`, where Qonto
+**Forward to Qonto** — `POST /api/gmail/forward { messageId }`
+([route](app/api/gmail/forward/route.ts)) uses
+[`lib/gmail/forward.ts`](lib/gmail/forward.ts) to rebuild the original mail
+(body + all attachments) and send it to `QONTO_RECEIPTS_INBOX`, where Qonto
 auto-attaches it. Needs the **`gmail.send`** scope (re-run `scripts/gmail-auth.mjs`)
 and `QONTO_RECEIPTS_INBOX` in `.env`. Pass `{ dry: true }` to build the MIME
 without sending. Verified: dry-run assembles the forward; a real send without the
@@ -256,11 +253,10 @@ scope returns a friendly 403 (no mail sent).
   connected Gmail account *must be* that owner. The `ForwardResult.from` field
   echoes it; the dry-run shows it before you send.
 
-### paperless-ngx matching in the app
+### paperless-ngx matching (API)
 
-Each worklist row also has an **"In Paperless suchen"** button — the paperless
-analog of the Gmail one, but the resolution is simpler because the app can pull
-the file itself.
+`GET /api/paperless/match` is the paperless analog of the Gmail match, but the
+resolution is simpler because the app can pull the file itself.
 
 - **Connection** [`lib/paperless/server.ts`](lib/paperless/server.ts) — read-only
   paperless client (`Authorization: Token <token>`, zero-dep `fetch`):
@@ -274,16 +270,14 @@ the file itself.
   proximity).
 - **Route** `GET /api/paperless/match?counterparty=…&date=…&amount=…`
   ([app/api/paperless/match/route.ts](app/api/paperless/match/route.ts)) →
-  `PaperlessMatch`.
-- **UI** the `PaperlessCell` in [`components/missing-attachments.tsx`](components/missing-attachments.tsx):
-  confidence badge, title, correspondent, document date, original filename, and an
-  **öffnen** deep link into the paperless web UI.
+  `PaperlessMatch` (confidence, title, correspondent, document date, original
+  filename, and a `permalink` into the paperless web UI).
 
-**One-click attach to Qonto** — each match has an **"An Qonto anhängen"** button.
-[`lib/paperless/attach.ts`](lib/paperless/attach.ts) downloads the document's PDF
-(`GET /api/documents/{id}/download/`) and uploads it via `POST /api/paperless/attach`
-([route](app/api/paperless/attach/route.ts)) straight onto the transaction, reusing
-the Qonto client's `uploadAttachment`. No receipts inbox, no forwarding — the bytes
+**Attach to Qonto** — `POST /api/paperless/attach { documentId, transactionId }`
+([route](app/api/paperless/attach/route.ts)) uses
+[`lib/paperless/attach.ts`](lib/paperless/attach.ts) to download the document's PDF
+(`GET /api/documents/{id}/download/`) and upload it straight onto the transaction,
+reusing the Qonto client's `uploadAttachment`. No receipts inbox, no forwarding — the bytes
 go directly to Qonto.
 
 ## Gotchas
@@ -307,6 +301,9 @@ go directly to Qonto.
   note / counterparty contains *Privatentnahme* (owner's draw) never need a
   receipt, so they're dropped from the worklist unconditionally — in both the CLI
   and the app ([lib/qonto/missing.ts](lib/qonto/missing.ts) `exemptFromInvoice`).
+  The **app** additionally exempts transactions tagged with the Qonto label
+  *Privatentnahme* or one of its sub-labels (`private_withdrawal`, resolved in
+  [lib/qonto/server.ts](lib/qonto/server.ts)); the CLI only matches the text.
   Add more exempt patterns to the `NO_INVOICE_NEEDED` regex in both files.
 - **Auth header is `slug:key`**, not `Bearer` — same convention as the app.
 - **The driver cannot conjure a missing invoice.** "Missing" means the document
@@ -349,8 +346,8 @@ go directly to Qonto.
 ### paperless-ngx sourcing
 
 - **paperless is searched directly, then attached directly.** Token auth means
-  the driver/app can both *search* and *download*, so resolution is one click
-  (`An Qonto anhängen`) — no receipts-inbox round-trip and no `gmail.send`-style
+  the driver/app can both *search* and *download*, so resolution is a single
+  call (`POST /api/paperless/attach`) — no receipts-inbox round-trip and no `gmail.send`-style
   scope dance. This is the key advantage over the Gmail path.
 - **`PAPERLESS_URL` is the base, without `/api`.** The client appends `/api`
   itself (and tolerates a trailing slash or an accidental `/api`). A wrong host
@@ -372,8 +369,8 @@ go directly to Qonto.
   cleaning (shared with Gmail) strips geo/legal words, so e.g. *Plan
   International* collapses to *Plan*, which substring-matches an unrelated *“Max
   Plan Abonnement”* receipt. Such hits land at `medium` (title-only, no
-  correspondent), and the title/correspondent are shown before you click
-  *An Qonto anhängen* — so review medium matches; only `high` (correspondent +
+  correspondent), and the match returns title/correspondent so you can check
+  them before calling `POST /api/paperless/attach` — so review medium matches; only `high` (correspondent +
   near date) is safe to attach unseen.
 
 ## Troubleshooting
@@ -402,5 +399,5 @@ go directly to Qonto.
 - `--paperless` reports "kein Treffer" for a vendor you know is filed → widen the
   window (`--before 21 --after 10`); the document's correspondent/title may not
   contain the cleaned vendor (it still searches OCR content, but scores lower).
-- "An Qonto anhängen" fails with 503 → paperless not configured; with a Qonto
+- `POST /api/paperless/attach` fails with 503 → paperless not configured; with a Qonto
   4xx → the same upload limits as a manual receipt upload apply (PDF, size).
